@@ -1,159 +1,211 @@
-#include <Arduino.h>  //not needed in the arduino ide
+// #include <ESP8266WiFi.h>
+// #include <DNSServer.h>
+// #include <ESP8266WebServer.h>
+// #include <lwip/opt.h>
+// #include <lwip/dns.h>
+// #include <lwip/init.h>
+// #include <lwip/netif.h>
+// #include <lwip/timers.h>
 
-// Captive Portal
-#include <AsyncTCP.h>  //https://github.com/me-no-dev/AsyncTCP using the latest dev version from @me-no-dev
+// const char *ssid = "CaptivePortal";  // ชื่อ Wi-Fi ที่ต้องการสร้าง
+// const char *password = "";           // รหัสผ่าน Wi-Fi (ถ้าต้องการให้เป็น open network ให้ใส่ "")
+
+// IPAddress apIP(192, 168, 1, 1);
+// IPAddress netMsk(255, 255, 255, 0);
+// DNSServer dnsServer;
+// ESP8266WebServer webServer(80);
+
+// // หน้าดีฟอลต์ของ Captive Portal
+// const char *html = "<!DOCTYPE html><html><head><title>Captive Portal</title></head><body><h1>Welcome to Captive Portal</h1></body></html>";
+
+// void handleRoot() {
+//   webServer.send(200, "text/html", html);
+// }
+
+// void setup() {
+//   Serial.begin(115200);
+  
+//   // เริ่มต้นการเชื่อมต่อ Wi-Fi
+//   WiFi.softAP(ssid, password);
+//   WiFi.softAPConfig(apIP, apIP, netMsk);
+  
+//   // กำหนดค่า DHCP lease time (TTL) ให้สั้นลง (ในหน่วยวินาที)
+//   wifi_softap_set_dhcps_lease_time(120);  // ตั้งเป็น 2 นาที (120 วินาที)
+  
+//   // เริ่มต้น DNS Server
+//   dnsServer.start(53, "*", apIP);
+  
+//   // ตั้งค่าเว็บเซิร์ฟเวอร์
+//   webServer.on("/", handleRoot);
+//   webServer.onNotFound(handleRoot);
+//   webServer.begin();
+  
+//   Serial.println("Captive Portal started.");
+// }
+
+// void loop() {
+//   dnsServer.processNextRequest();
+//   webServer.handleClient();
+// }
+
+// // ฟังก์ชันสำหรับตั้งค่า DHCP lease time (TTL)
+// void wifi_softap_set_dhcps_lease_time(uint32_t ttl_seconds) {
+//   struct dhcps_lease lease;
+//   lease.start_ip.addr = (uint32_t) apIP[0] | ((uint32_t) apIP[1] << 8) | ((uint32_t) apIP[2] << 16) | ((uint32_t) apIP[3] << 24);
+//   lease.end_ip.addr = lease.start_ip.addr;
+//   wifi_softap_set_dhcps_lease(&lease);
+//   wifi_softap_set_dhcps_lease_time(ttl_seconds);
+// }
+
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
 #include <DNSServer.h>
-#include <ESPAsyncWebServer.h>	//https://github.com/me-no-dev/ESPAsyncWebServer using the latest dev version from @me-no-dev
-#include <esp_wifi.h>			//Used for mpdu_rx_disable android workaround
+#include <ESP8266mDNS.h>
+#include <EEPROM.h>
+#include <uri/UriGlob.h>
 
-// Pre reading on the fundamentals of captive portals https://textslashplain.com/2022/06/24/captive-portals/
+/*
+   This example serves a "hello world" on a WLAN and a SoftAP at the same time.
+   The SoftAP allow you to configure WLAN parameters at run time. They are not setup in the sketch but saved on EEPROM.
 
-const char *ssid = "captive";  // FYI The SSID can't have a space in it.
-// const char * password = "12345678"; //Atleast 8 chars
-const char *password = NULL;  // no password
+   Connect your computer or cell phone to wifi network ESP_ap with password 12345678. A popup may appear and it allow you to go to WLAN config. If it does not then navigate to http://192.168.4.1/wifi and config it there.
+   Then wait for the module to connect to your wifi and take note of the WLAN IP it got. Then you can disconnect from ESP_ap and return to your regular WLAN.
 
-#define MAX_CLIENTS 4	// ESP32 supports up to 10 but I have not tested it yet
-#define WIFI_CHANNEL 6	// 2.4ghz channel 6 https://en.wikipedia.org/wiki/List_of_WLAN_channels#2.4_GHz_(802.11b/g/n/ax)
+   Now the ESP8266 is in your network. You can reach it through http://192.168.x.x/ (the IP you took note of) or maybe at http://esp8266.local too.
 
-const IPAddress localIP(4, 3, 2, 1);		   // the IP address the web server, Samsung requires the IP to be in public space
-const IPAddress gatewayIP(4, 3, 2, 1);		   // IP address of the network should be the same as the local IP for captive portals
-const IPAddress subnetMask(255, 255, 255, 0);  // no need to change: https://avinetworks.com/glossary/subnet-mask/
+   This is a captive portal because through the softAP it will redirect any http request to http://192.168.4.1/
+*/
 
-const String localIPURL = "http://4.3.2.1";	 // a string version of the local IP with http, used for redirecting clients to your webpage
+/* Set these to your desired softAP credentials. They are not configurable at runtime */
 
-const char index_html[] PROGMEM = R"=====(
-  <!DOCTYPE html> <html>
-    <head>
-      <title>ESP32 Captive Portal</title>
-      <style>
-        body {background-color:#06cc13;}
-        h1 {color: white;}
-        h2 {color: white;}
-      </style>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    </head>
-    <body>
-      <h1>Hello World!</h1>
-      <h2>This is a captive portal example. All requests will be redirected here </h2>
-    </body>
-  </html>
-)=====";
 
+#ifndef APSSID
+#define APSSID "fay-server"
+//#define APPSK "12345678"
+#endif
+
+const char *softAP_ssid = APSSID;
+//const char *softAP_password = APPSK;
+
+/* hostname for mDNS. Should work at least on windows. Try http://esp8266.local */
+const char *myHostname = "esp8266";
+
+/* Don't set this wifi credentials. They are configurated at runtime and stored on EEPROM */
+char ssid[33] = "";
+char password[65] = "";
+
+// DNS server
+const byte DNS_PORT = 53;
 DNSServer dnsServer;
-AsyncWebServer server(80);
 
-void setUpDNSServer(DNSServer &dnsServer, const IPAddress &localIP) {
-// Define the DNS interval in milliseconds between processing DNS requests
-#define DNS_INTERVAL 30
+// Web server
+ESP8266WebServer server(80);
 
-	// Set the TTL for DNS response and start the DNS server
-	dnsServer.setTTL(3600);
-	dnsServer.start(53, "*", localIP);
+ // หน้าดีฟอลต์ของ Captive Portal
+const char *html = "<!DOCTYPE html><html><head><title>Captive Portal</title></head><body><h1>Welcome to Captive Portal</h1></body></html>";
+
+void handleRoot() {
+  server.send(200, "text/html", html);
 }
 
-void startSoftAccessPoint(const char *ssid, const char *password, const IPAddress &localIP, const IPAddress &gatewayIP) {
-// Define the maximum number of clients that can connect to the server
-#define MAX_CLIENTS 4
-// Define the WiFi channel to be used (channel 6 in this case)
-#define WIFI_CHANNEL 6
+/* Soft AP network parameters */
+IPAddress apIP(172, 217, 28, 1);
+IPAddress netMsk(255, 255, 255, 0);
 
-	// Set the WiFi mode to access point and station
-	WiFi.mode(WIFI_MODE_AP);
 
-	// Define the subnet mask for the WiFi network
-	const IPAddress subnetMask(255, 255, 255, 0);
+/** Should I connect to WLAN asap? */
+boolean connect;
 
-	// Configure the soft access point with a specific IP and subnet mask
-	WiFi.softAPConfig(localIP, gatewayIP, subnetMask);
+/** Last time I tried to connect to WLAN */
+unsigned long lastConnectTry = 0;
 
-	// Start the soft access point with the given ssid, password, channel, max number of clients
-	WiFi.softAP(ssid, password, WIFI_CHANNEL, 0, MAX_CLIENTS);
-
-	// Disable AMPDU RX on the ESP32 WiFi to fix a bug on Android
-	esp_wifi_stop();
-	esp_wifi_deinit();
-	wifi_init_config_t my_config = WIFI_INIT_CONFIG_DEFAULT();
-	my_config.ampdu_rx_enable = false;
-	esp_wifi_init(&my_config);
-	esp_wifi_start();
-	vTaskDelay(100 / portTICK_PERIOD_MS);  // Add a small delay
-}
-
-void setUpWebserver(AsyncWebServer &server, const IPAddress &localIP) {
-	//======================== Webserver ========================
-	// WARNING IOS (and maybe macos) WILL NOT POP UP IF IT CONTAINS THE WORD "Success" https://www.esp8266.com/viewtopic.php?f=34&t=4398
-	// SAFARI (IOS) IS STUPID, G-ZIPPED FILES CAN'T END IN .GZ https://github.com/homieiot/homie-esp8266/issues/476 this is fixed by the webserver serve static function.
-	// SAFARI (IOS) there is a 128KB limit to the size of the HTML. The HTML can reference external resources/images that bring the total over 128KB
-	// SAFARI (IOS) popup browser has some severe limitations (javascript disabled, cookies disabled)
-
-	// Required
-	server.on("/connecttest.txt", [](AsyncWebServerRequest *request) { request->redirect("http://logout.net"); });	// windows 11 captive portal workaround
-	server.on("/wpad.dat", [](AsyncWebServerRequest *request) { request->send(404); });								// Honestly don't understand what this is but a 404 stops win 10 keep calling this repeatedly and panicking the esp32 :)
-
-	// Background responses: Probably not all are Required, but some are. Others might speed things up?
-	// A Tier (commonly used by modern systems)
-	server.on("/generate_204", [](AsyncWebServerRequest *request) { request->redirect(localIPURL); });		   // android captive portal redirect
-	server.on("/redirect", [](AsyncWebServerRequest *request) { request->redirect(localIPURL); });			   // microsoft redirect
-	server.on("/hotspot-detect.html", [](AsyncWebServerRequest *request) { request->redirect(localIPURL); });  // apple call home
-	server.on("/canonical.html", [](AsyncWebServerRequest *request) { request->redirect(localIPURL); });	   // firefox captive portal call home
-	server.on("/success.txt", [](AsyncWebServerRequest *request) { request->send(200); });					   // firefox captive portal call home
-	server.on("/ncsi.txt", [](AsyncWebServerRequest *request) { request->redirect(localIPURL); });			   // windows call home
-
-	// B Tier (uncommon)
-	//  server.on("/chrome-variations/seed",[](AsyncWebServerRequest *request){request->send(200);}); //chrome captive portal call home
-	//  server.on("/service/update2/json",[](AsyncWebServerRequest *request){request->send(200);}); //firefox?
-	//  server.on("/chat",[](AsyncWebServerRequest *request){request->send(404);}); //No stop asking Whatsapp, there is no internet connection
-	//  server.on("/startpage",[](AsyncWebServerRequest *request){request->redirect(localIPURL);});
-
-	// return 404 to webpage icon
-	server.on("/favicon.ico", [](AsyncWebServerRequest *request) { request->send(404); });	// webpage icon
-
-	// Serve Basic HTML Page
-	server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request) {
-		AsyncWebServerResponse *response = request->beginResponse(200, "text/html", index_html);
-		response->addHeader("Cache-Control", "public,max-age=31536000");  // save this file to cache for 1 year (unless you refresh)
-		request->send(response);
-		Serial.println("Served Basic HTML Page");
-	});
-
-	// the catch all
-	server.onNotFound([](AsyncWebServerRequest *request) {
-		request->redirect(localIPURL);
-		Serial.print("onnotfound ");
-		Serial.print(request->host());	// This gives some insight into whatever was being requested on the serial monitor
-		Serial.print(" ");
-		Serial.print(request->url());
-		Serial.print(" sent redirect to " + localIPURL + "\n");
-	});
-}
+/** Current WLAN status */
+unsigned int status = WL_IDLE_STATUS;
 
 void setup() {
-	// Set the transmit buffer size for the Serial object and start it with a baud rate of 115200.
-	Serial.setTxBufferSize(1024);
-	Serial.begin(115200);
+  delay(1000);
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println("Configuring access point...");
+  /* You can remove the password parameter if you want the AP to be open. */
+  WiFi.softAPConfig(apIP, apIP, netMsk);
+  WiFi.softAP(softAP_ssid);
+  delay(500);  // Without delay I've seen the IP address blank
+  Serial.print("AP IP address: ");
+  Serial.println(WiFi.softAPIP());
 
-	// Wait for the Serial object to become available.
-	while (!Serial)
-		;
+  /* Setup the DNS server redirecting all the domains to the apIP */
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsServer.start(DNS_PORT, "*", apIP);
 
-	// Print a welcome message to the Serial port.
-	Serial.println("\n\nCaptive Test, V0.5.0 compiled " __DATE__ " " __TIME__ " by CD_FER");  //__DATE__ is provided by the platformio ide
-	Serial.printf("%s-%d\n\r", ESP.getChipModel(), ESP.getChipRevision());
 
-	startSoftAccessPoint(ssid, password, localIP, gatewayIP);
 
-	setUpDNSServer(dnsServer, localIP);
+  /* Setup web pages: root, wifi config pages, SO captive portal detectors and not found. */
+  server.on("/", handleRoot);
+  //server.on("/wifi", handleWifi);
+  //server.on("/wifisave", handleWifiSave);
+  server.on(UriGlob("/generate_204*"), handleRoot);  // Android captive portal. Handle "/generate_204_<uuid>"-like requests. Might be handled by notFound handler.
+  //server.on("/fwlink", handleRoot);                  // Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
+  server.onNotFound(handleRoot);
+  server.begin();  // Web server start
+  Serial.println("HTTP server started");
+  //loadCredentials();           // Load WLAN credentials from network
+  connect = strlen(ssid) > 0;  // Request WLAN connect if there is a SSID
+}
 
-	setUpWebserver(server, localIP);
-	server.begin();
-
-	Serial.print("\n");
-	Serial.print("Startup Time:");	// should be somewhere between 270-350 for Generic ESP32 (D0WDQ6 chip, can have a higher startup time on first boot)
-	Serial.println(millis());
-	Serial.print("\n");
+void connectWifi() {
+  Serial.println("Connecting as wifi client...");
+  WiFi.disconnect();
+  WiFi.begin(ssid, password);
+  int connRes = WiFi.waitForConnectResult();
+  Serial.print("connRes: ");
+  Serial.println(connRes);
 }
 
 void loop() {
-	dnsServer.processNextRequest();	 // I call this atleast every 10ms in my other projects (can be higher but I haven't tested it for stability)
-	delay(DNS_INTERVAL);			 // seems to help with stability, if you are doing other things in the loop this may not be needed
+  if (connect) {
+    Serial.println("Connect requested");
+    connect = false;
+    connectWifi();
+    lastConnectTry = millis();
+  }
+  {
+    unsigned int s = WiFi.status();
+    if (s == 0 && millis() > (lastConnectTry + 60000)) {
+      /* If WLAN disconnected and idle try to connect */
+      /* Don't set retry time too low as retry interfere the softAP operation */
+      connect = true;
+    }
+    if (status != s) {  // WLAN status change
+      Serial.print("Status: ");
+      Serial.println(s);
+      status = s;
+      if (s == WL_CONNECTED) {
+        /* Just connected to WLAN */
+        Serial.println("");
+        Serial.print("Connected to ");
+        Serial.println(ssid);
+        Serial.print("IP address: ");
+        Serial.println(WiFi.localIP());
+
+        // Setup MDNS responder
+        if (!MDNS.begin(myHostname)) {
+          Serial.println("Error setting up MDNS responder!");
+        } else {
+          Serial.println("mDNS responder started");
+          // Add service to MDNS-SD
+          MDNS.addService("http", "tcp", 80);
+        }
+      } else if (s == WL_NO_SSID_AVAIL) {
+        WiFi.disconnect();
+      }
+    }
+    if (s == WL_CONNECTED) { MDNS.update(); }
+  }
+  // Do work:
+  // DNS
+  dnsServer.processNextRequest();
+  // HTTP
+  server.handleClient();
 }
