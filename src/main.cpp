@@ -57,12 +57,12 @@
 //   wifi_softap_set_dhcps_lease_time(ttl_seconds);
 // }
 
-#include <ESP8266WiFi.h>
+
 #include <WiFiClient.h>
-#include <ESP8266WebServer.h>
+#include <WebServer.h>
 #include <DNSServer.h>
-#include <ESP8266mDNS.h>
 #include <EEPROM.h>
+#include <ESPmDNS.h>
 #include <uri/UriGlob.h>
 
 /*
@@ -100,7 +100,8 @@ const byte DNS_PORT = 53;
 DNSServer dnsServer;
 
 // Web server
-ESP8266WebServer server(80);
+
+WebServer server(80);
 
  // หน้าดีฟอลต์ของ Captive Portal
 const char *html = "<!DOCTYPE html><html><head><title>Captive Portal</title></head><body><h1>Welcome to Captive Portal</h1></body></html>";
@@ -201,7 +202,7 @@ void loop() {
         WiFi.disconnect();
       }
     }
-    if (s == WL_CONNECTED) { MDNS.update(); }
+  
   }
   // Do work:
   // DNS
